@@ -1,0 +1,10 @@
+ultralytics
+mediapipe
+opencv-python
+numpy
+pandas
+fastapi
+uvicorn[standard]
+imageio
+imageio-ffmpeg
+gradio
