@@ -5,9 +5,9 @@ from typing import Dict, Any, Tuple
 # --- Carregamento das Tabelas RULA ---
 # Em uma arquitetura final, este caminho pode vir de um arquivo de configuração.
 try:
-    TABLE_A = pd.read_csv('/content/drive/MyDrive/TCC - Debs e Fer/TCC - Dados/rula_score_table_a.csv')
-    TABLE_B = pd.read_csv('/content/drive/MyDrive/TCC - Debs e Fer/TCC - Dados/rula_score_table_b.csv')
-    TABLE_C = pd.read_csv('/content/drive/MyDrive/TCC - Debs e Fer/TCC - Dados/rula_score_table_c.csv')
+    TABLE_A = pd.read_csv('data/TableA.csv')
+    TABLE_B = pd.read_csv('data/TableB.csv')
+    TABLE_C = pd.read_csv('data/TableC.csv')
 except FileNotFoundError:
     print("AVISO: A funcionalidade de cálculo de risco será limitada.")
     TABLE_A, TABLE_B, TABLE_C = None, None, None

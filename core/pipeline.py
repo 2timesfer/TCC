@@ -21,16 +21,16 @@ def calculate_scores_from_landmarks(landmarks: Dict[str, Tuple[int, int]]) -> Op
 
     # --- Grupo A: Braços e Punhos ---
     # Média dos lados, como definido na regra de negócio
-    upper_arm_angle = np.mean([
+    upper_arm_angle = float(np.mean([
         rula_calculator.calculate_angle(landmarks['left_hip'], landmarks['left_shoulder'], landmarks['left_elbow']),
         rula_calculator.calculate_angle(landmarks['right_hip'], landmarks['right_shoulder'], landmarks['right_elbow'])
-    ])
+    ]))
     scores['upper_arm'] = rula_calculator.classify_upper_arm(upper_arm_angle)
 
-    lower_arm_angle = np.mean([
+    lower_arm_angle = float(np.mean([
         rula_calculator.calculate_angle(landmarks['left_shoulder'], landmarks['left_elbow'], landmarks['left_wrist']),
         rula_calculator.calculate_angle(landmarks['right_shoulder'], landmarks['right_elbow'], landmarks['right_wrist'])
-    ])
+    ]))
     scores['lower_arm'] = rula_calculator.classify_lower_arm(lower_arm_angle)
 
     # Para o punho, a lógica pode ser mais complexa, mas usamos a base por enquanto
