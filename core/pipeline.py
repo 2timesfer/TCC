@@ -3,14 +3,9 @@ import imageio.v2 as imageio
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
 
-# --- IMPORTAÇÕES CORRIGIDAS ---
-# ".." sobe um nível (de 'core' para a raiz do projeto) e depois entra em 'domain'
-from ..domain import rula_calculator
-# ".." sobe um nível e depois entra em 'services'
-from ..services import pose_estimation
-
-# --- FUNÇÃO "COLA" ---
-# Esta função converte os landmarks em scores para o RULA
+from domain import rula_calculator
+from services import pose_estimation
+from services import report_generator
 
 def calculate_scores_from_landmarks(landmarks: Dict[str, Tuple[int, int]]) -> Optional[Dict[str, Any]]:
     """
@@ -43,7 +38,7 @@ def calculate_scores_from_landmarks(landmarks: Dict[str, Tuple[int, int]]) -> Op
     scores['wrist'] = rula_calculator.classify_wrist(wrist_angle)
 
     # Usando nossa função de twist aprimorada
-    scores['wrist_twist'] = rula_calculator.classify_wrist_twist(landmarks)
+    scores['wrist_twist'] = rula_calculator.classify_wrist_twist_enhanced(landmarks)
 
     # --- Grupo B: Pescoço, Tronco e Pernas ---
     neck_angle = rula_calculator.calculate_angle(landmarks['nose'], landmarks['neck'], landmarks['left_hip']) # Aproximação
@@ -62,26 +57,8 @@ def calculate_scores_from_landmarks(landmarks: Dict[str, Tuple[int, int]]) -> Op
     
     return scores
 
-# --- Funções de Desenho (ver discussão no ponto 2) ---
-def draw_skeleton(frame, landmarks: Dict[str, Any]):
-    # Implementação de desenho
-    return frame
-
-def draw_rula_score(frame, score: int, risk: str):
-    """Escreve a pontuação RULA na imagem."""
-    text = f"RULA Score: {score} - {risk}"
-    cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
-    return frame
-
-
-# --- O Orquestrador Principal ---
 def process_video_rula(input_path: str, output_path: str, pose_model: str = 'openpose'):
-    """
-    Orquestra o processo completo de análise ergonômica RULA de um vídeo.
-    Lê um vídeo, processa frame a frame e escreve o resultado.
-    """
     print("Iniciando o pipeline de processamento RULA...")
-    
     try:
         reader = imageio.get_reader(input_path)
         fps = reader.get_meta_data().get('fps', 30)
@@ -105,8 +82,11 @@ def process_video_rula(input_path: str, output_path: str, pose_model: str = 'ope
                 
                 if scores:
                     final_score, risk_level = rula_calculator.rula_risk(scores)
-                    annotated_frame = draw_skeleton(annotated_frame, landmarks)
-                    annotated_frame = draw_rula_score(annotated_frame, final_score, risk_level)
+                    
+                    # --- CHAMANDO O REPORT_GENERATOR ---
+                    # A responsabilidade de desenhar agora é delegada
+                    annotated_frame = report_generator.draw_skeleton(annotated_frame, landmarks)
+                    annotated_frame = report_generator.draw_rula_score(annotated_frame, final_score, risk_level)
 
             frame_to_write = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
             writer.append_data(frame_to_write)

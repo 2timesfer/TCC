@@ -13,8 +13,8 @@ pose_mediapipe = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0
 # Nota: Estes arquivos .prototxt e .caffemodel precisam estar acessíveis.
 # Em uma aplicação real, o caminho viria de uma configuração.
 try:
-    protoFile = "/content/drive/MyDrive/TCC - Debs e Fer/TCC - Dados/pose/mpi/pose_deploy_linevec_faster_4_stages.prototxt"
-    weightsFile = "/content/drive/MyDrive/TCC - Debs e Fer/TCC - Dados/pose/mpi/pose_iter_160000.caffemodel"
+    protoFile = r"C:\Users\ferca\Downloads\TCC\data\pose_deploy_linevec_faster_4_stages.prototxt"
+    weightsFile = r"C:\Users\ferca\Downloads\TCC\data\pose_iter_160000.caffemodel"
     pose_openpose = cv2.dnn.readNetFromCaffe(protoFile, weightsFile)
 except cv2.error as e:
     print("AVISO: Não foi possível carregar o modelo OpenPose. Verifique os caminhos dos arquivos.")
