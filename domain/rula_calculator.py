@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Optional, Tuple
 
 # --- Carregamento das Tabelas RULA ---
 # Em uma arquitetura final, este caminho pode vir de um arquivo de configuração.
@@ -62,7 +62,7 @@ def calculate_vector(p1, p2):
     """Calcula o vetor entre dois pontos."""
     return np.array(p2) - np.array(p1)
 
-def classify_wrist_twist_enhanced(landmarks: Dict[str, Tuple[float, float]]) -> int:
+def classify_wrist_twist_enhanced(landmarks: Dict[str, Tuple[int, int]]) -> int:
     """
     Classifica a pontuação da torção do punho inferindo a orientação
     a partir da posição relativa do cotovelo e do punho.
@@ -153,56 +153,115 @@ def classify_legs(is_supported: bool) -> int:
 
 # --- Função Principal de Cálculo do Risco RULA ---
 
-def rula_risk(scores: Dict[str, Any]) -> Tuple[int, str]:
+def rula_risk(scores: Dict[str, Any], point_score: Optional[Dict[str, Any]] = None) -> Tuple[Any, str]:
     """
-    Calcula a pontuação RULA final e o nível de risco a partir das pontuações individuais.
-    
-    Args:
-        scores (Dict): Um dicionário contendo as pontuações individuais
-                       (ex: 'upper_arm', 'neck', etc.).
-                       
-    Returns:
-        Tuple[int, str]: Uma tupla contendo a pontuação final e a descrição do risco.
+    Calcula o score e o nível de risco RULA a partir de um dicionário `scores`.
+    Retorna (final_score, risk_level).
+
+    scores: dicionário esperado (algumas chaves possíveis):
+        - wrist
+        - trunk
+        - upper_Shoulder  OR upper_arm
+        - lower_Limb      OR lower_arm
+        - neck
+        - wrist_twist
+        - legs
+        - muscle_use (opcional, default 0)
+        - force_load_a (opcional, default 0)
+        - force_load_b (opcional, default 0)
+        - upper_body_muscle (opcional, default 0)
+
+    point_score: dicionário opcional que será preenchido (se fornecido).
     """
+    global TABLE_A, TABLE_B, TABLE_C
+
+    # inicializa point_score se não foi passado
+    if point_score is None:
+        point_score = {}
+
+    # Valida presença das tabelas
     if TABLE_A is None or TABLE_B is None or TABLE_C is None:
-        return -1, "Tabelas RULA não carregadas."
+        return 'NULL', 'Tabelas não carregadas'
 
-    # Tabela A: Pescoço, Tronco e Pernas
-    wrist_arm_score = TABLE_A.loc[
-        (TABLE_A['Upper Arm'] == scores['upper_arm']) &
-        (TABLE_A['Lower Arm'] == scores['lower_arm']) &
-        (TABLE_A['Wrist'] == scores['wrist']) &
-        (TABLE_A['Wrist Twist'] == scores['wrist_twist']),
-        'Score'
-    ].iloc[0]
-    
-    wrist_arm_score += scores['muscle_use'] + scores['force_load_a']
+    # --- Normaliza nomes de keys (aceita variações) ---
+    wrist = scores.get('wrist')
+    trunk = scores.get('trunk')
+    upper_Shoulder = scores.get('upper_Shoulder', scores.get('upper_arm'))
+    lower_Limb = scores.get('lower_Limb', scores.get('lower_arm'))
+    neck = scores.get('neck')
+    wrist_twist = scores.get('wrist_twist')
+    legs = scores.get('legs')
+    muscle_use = scores.get('muscle_use', 0)
+    force_load_a = scores.get('force_load_a', 0)
+    force_load_b = scores.get('force_load_b', 0)
+    upper_body_muscle = scores.get('upper_body_muscle', 0)
 
-    # Tabela B: Braço e Punho
-    neck_trunk_leg_score = TABLE_B.loc[
-        (TABLE_B['Neck'] == scores['neck']) &
-        (TABLE_B['Trunk'] == scores['trunk']) &
-        (TABLE_B['Legs'] == scores['legs']),
-        'Score'
-    ].iloc[0]
+    # Validação mínima
+    if not all(v is not None and v != 0 for v in (wrist, trunk, upper_Shoulder, lower_Limb, neck, wrist_twist)):
+        return 'NULL', 'Dados insuficientes'
 
-    neck_trunk_leg_score += scores['muscle_use'] + scores['force_load_b']
-    
-    # Tabela C: Pontuação Final
-    final_score = TABLE_C.loc[
-        (TABLE_C['Wrist_Arm_Score'] == wrist_arm_score) &
-        (TABLE_C['Neck_Trunk_Leg_Score'] == neck_trunk_leg_score),
-        'Score'
-    ].iloc[0]
-    
-    # Classificação do Risco
-    if final_score <= 2:
-        risk = "Insignificant risk, no action required"
-    elif 3 <= final_score <= 4:
-        risk = "Low risk, change may be needed"
-    elif 5 <= final_score <= 6:
-        risk = "Medium risk, further investigation, change soon"
-    else: # final_score >= 7
-        risk = "Very high risk, investigate and implement change"
-        
-    return int(final_score), risk
+    # --- Table A lookup ---
+    colA = f"{wrist}WT{wrist_twist}"
+    if colA not in TABLE_A.columns:
+        return 'NULL', f"Coluna '{colA}' ausente em TABLE_A"
+
+    subsetA = TABLE_A.loc[
+        (TABLE_A.UpperArm == upper_Shoulder) &
+        (TABLE_A.LowerArm == lower_Limb),
+        colA
+    ]
+    if getattr(subsetA, "empty", True):
+        return 'NULL', f"Combinação inválida na TABLE_A para UpperArm={upper_Shoulder}, LowerArm={lower_Limb}"
+
+    try:
+        valA_base = float(subsetA.iloc[0]) # type: ignore
+    except Exception:
+        return 'NULL', "Valor inválido em TABLE_A"
+
+    point_score['posture_score_a'] = valA_base
+    valA = valA_base + muscle_use + force_load_a
+    point_score['wrist_and_arm_score'] = valA
+
+    # --- Table B lookup ---
+    colB = f"{trunk}{legs}"
+    if colB not in TABLE_B.columns:
+        return 'NULL', f"Coluna '{colB}' ausente em TABLE_B"
+
+    subsetB = TABLE_B.loc[TABLE_B.Neck == neck, colB]
+    if getattr(subsetB, "empty", True):
+        return 'NULL', f"Combinação inválida na TABLE_B para Neck={neck}"
+
+    try:
+        valB_base = float(subsetB.iloc[0]) # type: ignore
+    except Exception:
+        return 'NULL', "Valor inválido em TABLE_B"
+
+    point_score['posture_score_b'] = valB_base
+    valB = valB_base + force_load_b + upper_body_muscle
+    point_score['neck_trunk_leg_score'] = valB
+
+    # --- Table C lookup ---
+    a_idx = min(int(valA), 8)
+    b_idx = min(int(valB), 7)
+    colC = str(b_idx)
+    subsetC = TABLE_C.loc[TABLE_C.Score == a_idx, colC] if colC in TABLE_C.columns else None
+
+    if subsetC is None or getattr(subsetC, "empty", True):
+        return 'NULL', f"Combinação inválida na TABLE_C (Score={a_idx}, coluna={colC})"
+
+    try:
+        valC = int(subsetC.iloc[0])
+    except Exception:
+        return 'NULL', "Valor inválido em TABLE_C"
+
+    # --- Classificação ---
+    if valC <= 2:
+        risk = 'Negligible'
+    elif valC <= 4:
+        risk = 'Low risk'
+    elif valC <= 6:
+        risk = 'Medium risk'
+    else:
+        risk = 'Very high risk'
+
+    return valC, risk

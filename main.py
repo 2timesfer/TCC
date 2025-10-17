@@ -10,13 +10,14 @@ def main():
     # Defina aqui os caminhos para os seus vídeos de teste
     video_de_entrada = r'C:\Users\ferca\Downloads\TCC\data\S17_A05_T01 (1).mp4'
     video_de_saida = 'resultados/video_analisado.mp4'
-    
+    pose_model = 'mediapipe'
+
     # Chama a função principal do pipeline
     # Note que você pode escolher o modelo aqui ('openpose' ou 'mediapipe')
     process_video_rula(
         input_path=video_de_entrada,
         output_path=video_de_saida,
-        pose_model='openpose'
+        pose_model=pose_model
     )
 
 if __name__ == "__main__":

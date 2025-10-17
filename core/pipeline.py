@@ -34,7 +34,7 @@ def calculate_scores_from_landmarks(landmarks: Dict[str, Tuple[int, int]]) -> Op
     scores['lower_arm'] = rula_calculator.classify_lower_arm(lower_arm_angle)
 
     # Para o punho, a lógica pode ser mais complexa, mas usamos a base por enquanto
-    wrist_angle = 15 # Assumindo neutro como placeholder, o cálculo real precisa de mais pontos
+    wrist_angle = 15 
     scores['wrist'] = rula_calculator.classify_wrist(wrist_angle)
 
     # Usando nossa função de twist aprimorada
@@ -57,8 +57,9 @@ def calculate_scores_from_landmarks(landmarks: Dict[str, Tuple[int, int]]) -> Op
     
     return scores
 
-def process_video_rula(input_path: str, output_path: str, pose_model: str = 'openpose'):
+def process_video_rula(input_path: str, output_path: str, pose_model: str):
     print("Iniciando o pipeline de processamento RULA...")
+    print(f"Usando modelo de pose: {pose_model}")
     try:
         reader = imageio.get_reader(input_path)
         fps = reader.get_meta_data().get('fps', 30)
@@ -69,7 +70,7 @@ def process_video_rula(input_path: str, output_path: str, pose_model: str = 'ope
 
     frame_count = 0
     try:
-        for frame_original in reader:
+        for frame_original in reader: 
             frame_count += 1
             print(f"Processando frame {frame_count}...")
 
@@ -81,12 +82,16 @@ def process_video_rula(input_path: str, output_path: str, pose_model: str = 'ope
                 scores = calculate_scores_from_landmarks(landmarks)
                 
                 if scores:
-                    final_score, risk_level = rula_calculator.rula_risk(scores)
-                    
-                    # --- CHAMANDO O REPORT_GENERATOR ---
-                    # A responsabilidade de desenhar agora é delegada
-                    annotated_frame = report_generator.draw_skeleton(annotated_frame, landmarks)
-                    annotated_frame = report_generator.draw_rula_score(annotated_frame, final_score, risk_level)
+                    point_score = {}
+
+                    final_score, risk_level = rula_calculator.rula_risk(scores, point_score=point_score)
+
+                    # final_score pode ser 'NULL' e risk_level mensagem de erro — trate isso antes de desenhar
+                    if final_score == 'NULL':
+                        print(f"RULA not computed: {risk_level}")
+                    else:
+                        annotated_frame = report_generator.draw_skeleton(annotated_frame, landmarks)
+                        annotated_frame = report_generator.draw_rula_score(annotated_frame, final_score, risk_level)
 
             frame_to_write = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
             writer.append_data(frame_to_write)

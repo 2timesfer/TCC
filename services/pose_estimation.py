@@ -2,11 +2,13 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from typing import Dict, Optional, Tuple, Any
+from domain.models import detect_person_roi
 
 # --- Inicialização dos Modelos ---
 
 # Inicializa o MediaPipe Pose
-mp_pose = mp.solutions.pose
+mp_pose = mp.solutions.pose # type: ignore
+mp_drawing = mp.solutions.drawing_utils # type: ignore
 pose_mediapipe = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
 
 # Carrega o modelo OpenPose pré-treinado do OpenCV
@@ -64,7 +66,7 @@ def _map_mediapipe_to_standard_format(pose_landmarks: Any, image_shape: Tuple[in
 
 # --- Função Pública Principal ---
 
-def estimate_pose(frame: np.ndarray, model_name: str = 'openpose') -> Optional[Dict[str, Tuple[int, int]]]:
+def estimate_pose(frame: np.ndarray, model_name: str) -> Optional[Dict[str, Tuple[int, int]]]:
     """
     Estima a pose em um único quadro de vídeo usando o modelo especificado.
 
@@ -77,13 +79,30 @@ def estimate_pose(frame: np.ndarray, model_name: str = 'openpose') -> Optional[D
         Um dicionário com os nomes dos landmarks e suas coordenadas (x, y),
         ou None se nenhuma pose for detectada.
     """
+
+    roi_coords = detect_person_roi(frame)
+    
+    if roi_coords is None:
+        return None
+        
+    x1, y1, x2, y2 = roi_coords
+    person_roi = frame[y1:y2, x1:x2]
+        
+    target_frame_for_pose = frame[y1:y2, x1:x2]
+
+    if target_frame_for_pose.size == 0:
+        return None
+    
+    relative_landmarks: Optional[Dict[str, Tuple[int, int]]] = None
+    drawn_roi = person_roi.copy()
+
     if model_name == 'openpose':
         if pose_openpose is None:
             print("ERRO: Modelo OpenPose não está carregado.")
             return None
             
-        frame_height, frame_width, _ = frame.shape
-        in_blob = cv2.dnn.blobFromImage(frame, 1.0 / 255, (368, 368), (0, 0, 0), swapRB=False, crop=False)
+        frame_height, frame_width, _ = target_frame_for_pose.shape
+        in_blob = cv2.dnn.blobFromImage(target_frame_for_pose, 1.0 / 255, (368, 368), (0, 0, 0), swapRB=False, crop=False)
         
         pose_openpose.setInput(in_blob)
         output = pose_openpose.forward()
@@ -101,14 +120,20 @@ def estimate_pose(frame: np.ndarray, model_name: str = 'openpose') -> Optional[D
         return _map_openpose_to_standard_format(detected_points)
 
     elif model_name == 'mediapipe':
-        # MediaPipe espera imagens em RGB
-        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # 1. Prepara a imagem para o MediaPipe
+        image_rgb = cv2.cvtColor(person_roi, cv2.COLOR_BGR2RGB)
         results = pose_mediapipe.process(image_rgb)
-        
+
+        # 2. Se a pose for encontrada, faz o processamento
         if results.pose_landmarks:
-            return _map_mediapipe_to_standard_format(results.pose_landmarks, frame.shape[:2])
-        else:
-            return None
-            
-    else:
-        raise ValueError("Nome do modelo inválido. Escolha 'openpose' ou 'mediapipe'.")
+            # 2a. DESENHA o esqueleto na cópia da ROI, como você pediu
+            mp_drawing.draw_landmarks(
+                drawn_roi, results.pose_landmarks, mp_pose.POSE_CONNECTIONS,
+                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 128, 255), thickness=2)
+            )
+            # 2b. CALCULA os landmarks com coordenadas relativas à ROI
+            #    e armazena na variável 'relative_landmarks' para ser usada depois
+            roi_height, roi_width, _ = person_roi.shape
+            relative_landmarks = _map_mediapipe_to_standard_format(results.pose_landmarks, (roi_height, roi_width))
+            return relative_landmarks
