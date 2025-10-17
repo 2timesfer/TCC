@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from ultralytics import YOLO
+from ultralytics import YOLO # type: ignore
 from ergonomy_risk import process_frame_for_rula
 
 # Modelo YOLOv8 para detecção de pessoa
@@ -30,7 +30,7 @@ def detect_person_box(frame, margin_pct=0.15):
         min(h, y2 + my)
     )
 
-def process_video_and_get_rula(video_path, output_path):
+def process_video_and_get_rula(video_path, output_path, detector_name):
     """
     Processa o vídeo, realiza a análise RULA e gera um novo vídeo com o esqueleto e o risco.
     """
@@ -43,7 +43,7 @@ def process_video_and_get_rula(video_path, output_path):
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
     while cap.isOpened():
@@ -60,7 +60,7 @@ def process_video_and_get_rula(video_path, output_path):
                 continue
 
             # Processa o ROI para análise RULA (chamada simplificada)
-            processed_roi, rula_result = process_frame_for_rula(roi)
+            processed_roi, rula_result = process_frame_for_rula(roi, detector_name=detector_name)
             
             # Coloca o ROI processado de volta no frame original
             frame[y1:y2, x1:x2] = processed_roi
