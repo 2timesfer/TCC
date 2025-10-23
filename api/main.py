@@ -23,7 +23,7 @@ if __name__ == "__main__":
         inputs=[
             gr.Video(label="Upload do Vídeo para Análise"),
             gr.Radio(
-                ["MediaPipe", "OpenPose"], 
+                ["MediaPipe", "OpenPose", "YOLO"], 
                 label="Escolha o Detector de Pose", 
                 value="MediaPipe" # Valor padrão
             )
