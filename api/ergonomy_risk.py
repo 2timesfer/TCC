@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import pandas as pd
+import datetime     # Adicione no topo
+import json
 from ultralytics import YOLO # type: ignore 
 
 # --- Carregamento das Tabelas RULA ---
@@ -64,7 +66,7 @@ except Exception as e:
     pose_yolo = None
 
 
-# --- Funções de Detecção de Pose (Novas e Refatoradas) ---
+# --- Funções de Detecção de Pose  ---
 
 def detect_pose_mediapipe(frame):
     """
@@ -130,7 +132,7 @@ def detect_pose_openpose(frame):
 
     return frame, key_points_dict
 
-def detect_pose_yolo(frame): # <--- FUNÇÃO ADICIONADA
+def detect_pose_yolo(frame): 
     """
     Detecta a pose usando YOLO-Pose e retorna o frame desenhado e os keypoints padronizados.
     """
@@ -160,7 +162,7 @@ def detect_pose_yolo(frame): # <--- FUNÇÃO ADICIONADA
 
     return frame, key_points_dict
 
-# --- Funções de Análise RULA (O seu código) ---
+# --- Funções de Análise RULA ---
 
 def calculate_angle(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
@@ -232,75 +234,152 @@ def rula_risk(point_score, wrist, trunk, upper_Shoulder, lower_Limb, neck,
 def process_frame_for_rula(frame, detector_name='mediapipe'):
     """
     Processa um único frame, despachando para o detector de pose correto,
-    e depois calcula o RULA.
+    e depois calcula o RULA, retornando também as métricas.
     """
     if tablea is None:
-        return frame, {'score': 'ERROR', 'risk': 'Tabelas RULA não carregadas'}
+        return frame, {'score': 'ERROR', 'risk': 'Tabelas RULA não carregadas'}, {}
 
-    # Passo 1: Detectar a pose com o detector escolhido
+    # Passo 1: Detectar a pose
     key_points = {}
     if detector_name == 'mediapipe':
         frame, key_points = detect_pose_mediapipe(frame)
-    
     elif detector_name == 'openpose':
         if net_openpose is None:
-            return frame, {'score': 'ERROR', 'risk': 'Modelo OpenPose não carregado'}
+            return frame, {'score': 'ERROR', 'risk': 'Modelo OpenPose não carregado'}, {}
         frame, key_points = detect_pose_openpose(frame)
-    
-    elif detector_name == 'yolo': # <--- OPÇÃO ADICIONADA
+    elif detector_name == 'yolo':
         if pose_yolo is None:
-            return frame, {'score': 'ERROR', 'risk': 'Modelo YOLO-Pose não carregado'}
+            return frame, {'score': 'ERROR', 'risk': 'Modelo YOLO-Pose não carregado'}, {}
         frame, key_points = detect_pose_yolo(frame)
-    
     else:
         raise ValueError("Detector de pose desconhecido. Escolha 'mediapipe', 'openpose' ou 'yolo'.")
 
     rula_result = {'score': 'NULL', 'risk': 'NULL'}
     
+    # Inicializa métricas e ângulos que queremos coletar
+    metrics = {
+        'upper_arm_angle': None, 'lower_arm_angle': None, 'trunk_angle': None, 'neck_angle': None,
+        'upper_arm_score': 0, 'lower_arm_score': 0, 'wrist_score': 0,
+        'neck_score': 0, 'trunk_score': 0, 'leg_score': 0,
+        'rula_score': None, 'rula_risk': 'NULL'
+    }
+
     # Passo 2: Calcular ângulos e RULA (lógica unificada)
     if not key_points:
-        return frame, rula_result
+        return frame, rula_result, metrics # Retorna métricas vazias se nada for detectado
 
-    upper_arm_score, lower_arm_score, wrist_score = 0, 0, 0
-    neck_score, trunk_score, leg_score = 0, 0, 0
-
-    # Tenta calcular os ângulos
-    # Nota: YOLO não tem 'Neck', então o cálculo de neck/trunk falhará.
-    # Precisamos de uma lógica de aproximação se 'Neck' não existir
-    
+    # Aproximação de 'Neck' para YOLO
     if 'Neck' not in key_points and all(key_points.get(k) for k in ['RShoulder', 'LShoulder']):
-        # Aproxima 'Neck' como o ponto médio dos ombros
         r_shoulder = np.array(key_points['RShoulder'])
         l_shoulder = np.array(key_points['LShoulder'])
         key_points['Neck'] = tuple(((r_shoulder + l_shoulder) / 2).astype(int))
 
+    # --- Cálculos de Ângulo e Pontuação ---
     if all(key_points.get(k) for k in ['RShoulder', 'RElbow', 'RHip']):
-        upper_arm_angle = calculate_angle(key_points['RHip'], key_points['RShoulder'], key_points['RElbow'])
-        upper_arm_score = classify_upper_arm(upper_arm_angle)
+        metrics['upper_arm_angle'] = calculate_angle(key_points['RHip'], key_points['RShoulder'], key_points['RElbow'])
+        metrics['upper_arm_score'] = classify_upper_arm(metrics['upper_arm_angle'])
 
     if all(key_points.get(k) for k in ['RShoulder', 'RElbow', 'RWrist']):
-        lower_arm_angle = calculate_angle(key_points['RShoulder'], key_points['RElbow'], key_points['RWrist'])
-        lower_arm_score = classify_lower_arm(lower_arm_angle)
+        metrics['lower_arm_angle'] = calculate_angle(key_points['RShoulder'], key_points['RElbow'], key_points['RWrist'])
+        metrics['lower_arm_score'] = classify_lower_arm(metrics['lower_arm_angle'])
     
     if all(key_points.get(k) for k in ['Neck', 'LHip', 'RHip']):
         hip_mid = (np.array(key_points['LHip']) + np.array(key_points['RHip'])) // 2
-        trunk_angle = calculate_angle(key_points['Neck'], tuple(hip_mid), key_points.get('RKnee', tuple(hip_mid + (0, 50))))
-        trunk_score = classify_trunk(trunk_angle)
+        # Usamos RKnee como referência, se não existir, usa um ponto abaixo do quadril
+        ref_point = key_points.get('RKnee', tuple(hip_mid + (0, 50))) 
+        metrics['trunk_angle'] = calculate_angle(key_points['Neck'], tuple(hip_mid), ref_point)
+        metrics['trunk_score'] = classify_trunk(metrics['trunk_angle'])
 
     if all(key_points.get(k) for k in ['Nose', 'Neck', 'LHip', 'RHip']):
         hip_mid = (np.array(key_points['LHip']) + np.array(key_points['RHip'])) // 2
-        neck_angle = calculate_angle(tuple(hip_mid), key_points['Neck'], key_points['Nose'])
-        neck_score = classify_neck(180 - neck_angle)
-
+        neck_angle_raw = calculate_angle(tuple(hip_mid), key_points['Neck'], key_points['Nose'])
+        metrics['neck_angle'] = 180 - neck_angle_raw # Ângulo de inclinação
+        metrics['neck_score'] = classify_neck(metrics['neck_angle'])
 
     # Simplificações mantidas
-    wrist_score = 1
-    leg_score = 1
+    metrics['wrist_score'] = 1
+    metrics['leg_score'] = 1
     
+    # --- Cálculo RULA Final ---
     rula_result, _ = rula_risk(
-        {}, wrist=wrist_score, trunk=trunk_score, upper_Shoulder=upper_arm_score,
-        lower_Limb=lower_arm_score, neck=neck_score, wrist_twist=1, legs=leg_score,
+        {}, wrist=metrics['wrist_score'], trunk=metrics['trunk_score'], upper_Shoulder=metrics['upper_arm_score'],
+        lower_Limb=metrics['lower_arm_score'], neck=metrics['neck_score'], wrist_twist=1, legs=metrics['leg_score'],
         muscle_use=0, force_load_a=0, force_load_b=0, upper_body_muscle=0
     )
+    
+    # Armazena o resultado final do RULA nas métricas
+    metrics['rula_score'] = rula_result.get('score')
+    metrics['rula_risk'] = rula_result.get('risk')
 
-    return frame, rula_result
+    return frame, rula_result, metrics
+
+def get_rula_assessment_text(score):
+    """Converte um score numérico em texto de avaliação."""
+    if score <= 2: 
+        return 'Negligible'
+    if score <= 4: 
+        return 'Low risk'
+    if score <= 6: 
+        return 'Medium risk'
+    if score > 6: 
+        return 'Very high risk'
+    return 'Unknown'
+
+def calculate_summary_statistics(all_frame_metrics, fps, total_frames, user_context_dict, request_id):
+    """
+    Recebe uma lista de métricas de todos os frames e calcula o JSON de resumo.
+    """
+    if not all_frame_metrics:
+        print("Nenhuma métrica foi coletada para o resumo.")
+        return None
+
+    total_video_duration_seconds = total_frames / fps if fps > 0 else 0
+
+    # --- Cálculo das Estatísticas ---
+    df = pd.DataFrame(all_frame_metrics)
+    
+    # Converte colunas numéricas, tratando 'NULL' ou 'Erro' como NaN
+    df['rula_score'] = pd.to_numeric(df['rula_score'], errors='coerce')
+    df['neck_angle'] = pd.to_numeric(df['neck_angle'], errors='coerce')
+    df['trunk_angle'] = pd.to_numeric(df['trunk_angle'], errors='coerce')
+
+    # Filtra os NaNs (frames onde a detecção falhou)
+    df_valid_rula = df.dropna(subset=['rula_score'])
+    df_valid_neck = df.dropna(subset=['neck_angle'])
+    df_valid_trunk = df.dropna(subset=['trunk_angle'])
+
+    # 1. Métricas de Vídeo
+    # Define "má postura" como RULA score > 4 (Médio ou Alto risco)
+    bad_posture_frames = len(df_valid_rula[df_valid_rula['rula_score'] > 4])
+    time_in_bad_posture_seconds = (bad_posture_frames / fps) if fps > 0 else 0
+
+    video_metrics = {
+        "total_video_duration_seconds": total_video_duration_seconds,
+        "time_in_bad_posture_seconds": time_in_bad_posture_seconds,
+        "avg_head_tilt_degrees": df_valid_neck['neck_angle'].mean() if not df_valid_neck.empty else 0,
+        "max_head_tilt_degrees": df_valid_neck['neck_angle'].max() if not df_valid_neck.empty else 0,
+        "avg_back_curvature_degrees": df_valid_trunk['trunk_angle'].mean() if not df_valid_trunk.empty else 0,
+        "max_back_curvature_degrees": df_valid_trunk['trunk_angle'].max() if not df_valid_trunk.empty else 0
+    }
+
+    # 2. Estatísticas de Vídeo
+    mean_rula = df_valid_rula['rula_score'].mean() if not df_valid_rula.empty else 0
+    
+    video_statics = {
+        "mean_rula_score": mean_rula,
+        "rula_score_assessment": get_rula_assessment_text(mean_rula),
+        "sd_rula": df_valid_rula['rula_score'].std() if not df_valid_rula.empty else 0,
+        "variance": df_valid_rula['rula_score'].var() if not df_valid_rula.empty else 0
+    }
+    
+    # 3. Montagem do JSON Final
+    summary_json = {
+        "request_id": request_id,
+        "analysis_timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "risk_score": mean_rula, # Usando a média RULA como o score de risco principal
+        "video_metrics": video_metrics,
+        "video_statics": video_statics,
+        "user_context": user_context_dict
+    }
+    
+    return summary_json
