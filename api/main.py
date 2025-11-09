@@ -1,12 +1,24 @@
+"""
+Módulo Principal (Interface Gradio)
+
+Responsável por:
+1. Criar a interface web com Gradio.
+2. Receber o upload do vídeo e as configurações do usuário.
+3. Orquestrar o fluxo de trabalho:
+    a. Definir nomes de arquivos de saída (vídeo, json bruto).
+    b. Chamar 'video_process.py' para coletar os dados.
+    c. Chamar 'report_generator.py' para analisar os dados brutos.
+4. Exibir os resultados (vídeo processado, link para baixar o JSON
+   bruto, e o relatório estatístico em texto).
+"""
 import gradio as gr
-from video_process import process_video_and_get_rula # MUDANÇA 1: Importar a nova função
+from video_process import process_video_and_collect_raw_data
+from reports import generate_report_from_raw_file 
 import datetime
-from reports import generate_text_summary
 import json
 import os
 
-# MUDANÇA 2: Definir o contexto do usuário que será usado no teste
-# Como a interface do Gradio não pede esses dados, vamos usar um valor padrão
+# Contexto do usuário (será passado para o gerador de relatório)
 DEFAULT_USER_CONTEXT = {
     "job_role": "analista_marketing",
     "hours_per_day": 6,
@@ -19,54 +31,50 @@ DEFAULT_USER_CONTEXT = {
 def video_analysis_interface(video_file, detector_choice):
     """
     Função que a interface do Gradio irá chamar.
-    Atualizada para a nova função de processamento.
     """
     if video_file is None:
-        # MUDANÇA 3: Retornar 2 Nones para os 2 outputs (Vídeo e Arquivo)
-        return None, None 
+        return None, None, "Por favor, envie um vídeo." 
 
-    # --- Configurar nomes de arquivos e IDs ---
-    # Usamos um timestamp para garantir que os arquivos sejam únicos
+    # --- 1. Configurar nomes de arquivos e IDs ---
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Pega o nome do arquivo original para usar no ID
     base_filename = "video"
-    if hasattr(video_file, 'name'): # Se for um arquivo temporário do Gradio
+    if hasattr(video_file, 'name'): 
         base_filename = os.path.basename(video_file.name).split('.')[0]
     
     request_id = f"{base_filename}_{timestamp}"
-    
-    # Define os caminhos de saída
     output_video_path = f"{request_id}_processed.mp4"
-    output_json_path = f"{request_id}_summary.json"
+    # Define o nome do arquivo de dados brutos que será criado
+    output_raw_data_path = f"{request_id}_raw_data.json" 
     
     detector_name = detector_choice.lower()
     
     print(f"Iniciando análise com ID: {request_id}")
 
-    # MUDANÇA 4: Chamar a nova função 'process_video_and_generate_summary'
-    # Ela precisa de 5 argumentos e retorna 2 valores
-    processed_video, final_summary = process_video_and_get_rula(
-        video_path=video_file,               # O vídeo do upload
-        output_path=output_video_path,       # O caminho do vídeo de saída
-        detector_name=detector_name,         # O detector escolhido
-        user_context_dict=DEFAULT_USER_CONTEXT, # O contexto que definimos acima
-        request_id=request_id                # O ID único que geramos
+    # --- 2. Chamar o Coletor de Dados ---
+    # Ele processa o vídeo E salva o JSON bruto
+    processed_video, raw_data_path = process_video_and_collect_raw_data(
+        video_path=video_file,
+        output_path=output_video_path,
+        detector_name=detector_name,
+        raw_data_json_path=output_raw_data_path # Passa o caminho de saída
     )
     
-    # MUDANÇA 5: Salvar o JSON retornado em um arquivo
-    if final_summary:
-        with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump(final_summary, f, indent=4, ensure_ascii=False)
+    if raw_data_path:
+        # --- 3. Chamar o Analisador de Dados ---
+        # Ele lê o JSON bruto e gera o relatório em texto
+        text_report = generate_report_from_raw_file(
+            raw_json_path=raw_data_path,
+            user_context=DEFAULT_USER_CONTEXT,
+            request_id=request_id
+        )
         
-        text_report = generate_text_summary(final_summary)
-
-        print(f"Análise concluída. Vídeo: {processed_video}, Resumo: {output_json_path}")
-        # Retorna o caminho do vídeo e o caminho do JSON
-        return processed_video, output_json_path, text_report
+        print(f"Análise concluída. Vídeo: {processed_video}, Dados Brutos: {raw_data_path}")
+        
+        # --- 4. Retornar os 3 resultados para o Gradio ---
+        return processed_video, raw_data_path, text_report
     else:
         print("A análise falhou.")
-        return None, None
+        return None, None, "A análise do vídeo falhou."
 
 if __name__ == "__main__":
     iface = gr.Interface(
@@ -76,17 +84,16 @@ if __name__ == "__main__":
             gr.Radio(
                 ["MediaPipe", "OpenPose", "YOLO"], 
                 label="Escolha o Detector de Pose", 
-                value="YOLO" # Valor padrão (YOLO tende a ser mais robusto)
+                value="YOLO"
             )
         ],
-        # MUDANÇA 6: Atualizar os 'outputs' para aceitar 2 resultados
         outputs=[
             gr.Video(label="Resultado da Análise"),
-            gr.File(label="Baixar Resumo Estatístico (.json)"),
-            gr.Textbox(label="Resumo Condensado", lines=15)
+            gr.File(label="Baixar Dados Brutos Frame-a-Frame (.json)"), 
+            gr.Textbox(label="Relatório Estatístico", lines=20) 
         ],
-        title="Análise Ergonômica de Risco (RULA)",
-        description="Faça o upload de um vídeo. O sistema irá processá-lo e gerar um vídeo de análise e um arquivo .json com as estatísticas."
+        title="Análise Ergonômica de Risco (RULA) - Coletor e Analisador",
+        description="Faça o upload de um vídeo. O sistema irá processá-lo, gerar um vídeo de análise, um arquivo .json com os dados brutos de cada frame e um relatório estatístico."
     )
     
     iface.launch()

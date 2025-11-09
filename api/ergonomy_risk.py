@@ -1,8 +1,22 @@
+"""
+Módulo de Análise Ergonômica (RULA)
+
+Responsável por:
+1. Carregar os modelos de detecção de pose (YOLO, MediaPipe, OpenPose).
+2. Carregar as tabelas de pontuação RULA.
+3. Fornecer uma única função 'process_frame_for_rula' que recebe
+   um frame, detecta a pose, calcula o RULA, E AGORA DESENHA
+   geometricamente os ângulos e seus valores no frame.
+
+CORREÇÃO v2: A função 'draw_angle_on_frame' foi reescrita para usar
+produto vetorial, garantindo que o arco do ângulo interno (<180°)
+seja sempre desenhado corretamente.
+"""
 import cv2
 import numpy as np
 import mediapipe as mp
 import pandas as pd
-import datetime     # Adicione no topo
+import datetime
 import json
 from ultralytics import YOLO # type: ignore 
 
@@ -17,7 +31,7 @@ except FileNotFoundError:
     tablea, tableb, tablec = None, None, None
 
 # --- Carregamento dos Modelos de Detecção de Pose ---
-
+# (As seções de carregamento do MediaPipe, OpenPose, YOLO permanecem inalteradas)
 # 1. MediaPipe
 mp_pose = mp.solutions.pose # type: ignore
 pose_mediapipe = mp_pose.Pose(static_image_mode=False, model_complexity=1, min_detection_confidence=0.5)
@@ -29,7 +43,6 @@ try:
     weights_file = r"./models/openpose/pose_iter_160000.caffemodel"
     net_openpose = cv2.dnn.readNetFromCaffe(proto_file, weights_file)
     print("Modelo OpenPose carregado com sucesso.")
-    # Mapeamento de partes do corpo do OpenPose
     BODY_PARTS = { "Nose": 0, "Neck": 1, "RShoulder": 2, "RElbow": 3, "RWrist": 4,
                    "LShoulder": 5, "LElbow": 6, "LWrist": 7, "RHip": 8, "RKnee": 9,
                    "RAnkle": 10, "LHip": 11, "LKnee": 12, "LAnkle": 13, "REye": 14,
@@ -43,18 +56,16 @@ except cv2.error:
     print("Erro: Arquivos do modelo OpenPose (.prototxt, .caffemodel) não encontrados.")
     net_openpose = None
 
-# 3. YOLO-Pose (NOVO)
+# 3. YOLO-Pose
 try:
-    pose_yolo = YOLO('yolov8n-pose.pt') # Carrega o modelo YOLO-Pose
+    pose_yolo = YOLO('yolov8n-pose.pt') 
     print("Modelo YOLO-Pose carregado com sucesso.")
-    # Mapeamento de índices do YOLO para os nomes do seu padrão
     YOLO_BODY_PARTS = {
         0: "Nose", 1: "LEye", 2: "REye", 3: "LEar", 4: "REar",
         5: "LShoulder", 6: "RShoulder", 7: "LElbow", 8: "RElbow",
         9: "LWrist", 10: "RWrist", 11: "LHip", 12: "RHip",
         13: "LKnee", 14: "RKnee", 15: "LAnkle", 16: "RAnkle"
     }
-    # Pares de pose para desenhar o YOLO (pode ser ajustado)
     YOLO_POSE_PAIRS = [
         ["LShoulder", "RShoulder"], ["LShoulder", "LElbow"], ["LElbow", "LWrist"],
         ["RShoulder", "RElbow"], ["RElbow", "RWrist"], ["LShoulder", "LHip"],
@@ -62,16 +73,12 @@ try:
         ["LKnee", "LAnkle"], ["RHip", "RKnee"], ["RKnee", "RAnkle"]
     ]
 except Exception as e:
-    print(f"Erro ao carregar modelo YOLO-Pose: {e}. Verifique se 'ultralytics' está instalado.")
+    print(f"Erro ao carregar modelo YOLO-Pose: {e}.")
     pose_yolo = None
 
-
-# --- Funções de Detecção de Pose  ---
-
+# --- Funções de Detecção de Pose ---
+# (detect_pose_mediapipe, detect_pose_openpose, detect_pose_yolo permanecem inalteradas)
 def detect_pose_mediapipe(frame):
-    """
-    Detecta a pose usando MediaPipe e retorna o frame desenhado e os keypoints padronizados.
-    """
     key_points_dict = {}
     h, w, _ = frame.shape
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -80,8 +87,6 @@ def detect_pose_mediapipe(frame):
     if results.pose_landmarks:
         mp_drawing.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
         lm = results.pose_landmarks.landmark
-        
-        # Mapeamento de landmarks do MediaPipe para o nosso formato padrão
         lm_map = {'RShoulder': 12, 'RElbow': 14, 'RWrist': 16, 'RHip': 24, 'RKnee': 26,
                   'LShoulder': 11, 'LElbow': 13, 'LWrist': 15, 'LHip': 23, 'LKnee': 25,
                   'Nose': 0, 'LEye': 2, 'REye': 5, 'LEar': 7, 'REar': 8}
@@ -95,9 +100,6 @@ def detect_pose_mediapipe(frame):
     return frame, key_points_dict
 
 def detect_pose_openpose(frame):
-    """
-    Detecta a pose usando OpenPose e retorna o frame desenhado e os keypoints padronizados.
-    """
     key_points_dict = {}
     h, w, _ = frame.shape
     
@@ -116,12 +118,10 @@ def detect_pose_openpose(frame):
         else:
             points.append(None)
     
-    # Mapeia os pontos detectados para o nosso dicionário padrão
     for part_name, part_idx in BODY_PARTS.items():
         if part_idx < len(points):
             key_points_dict[part_name] = points[part_idx]
 
-    # Desenha o esqueleto
     for pair in POSE_PAIRS:
         part_a = pair[0]
         part_b = pair[1]
@@ -133,14 +133,10 @@ def detect_pose_openpose(frame):
     return frame, key_points_dict
 
 def detect_pose_yolo(frame): 
-    """
-    Detecta a pose usando YOLO-Pose e retorna o frame desenhado e os keypoints padronizados.
-    """
     key_points_dict = {}
     results = pose_yolo(frame, verbose=False)
     
     if results and results[0].keypoints:
-        # Pega os keypoints da primeira pessoa detectada
         keypoints_tensor = results[0].keypoints.xy[0]
         keypoints_conf = results[0].keypoints.conf[0]
 
@@ -151,19 +147,19 @@ def detect_pose_yolo(frame):
             elif part_name:
                 key_points_dict[part_name] = None
         
-        # Desenha o esqueleto
         for pair in YOLO_POSE_PAIRS:
             part_a = pair[0]
             part_b = pair[1]
             if key_points_dict.get(part_a) and key_points_dict.get(part_b):
-                cv2.line(frame, key_points_dict[part_a], key_points_dict[part_b], (255, 0, 0), 2) # Cor Azul
-                cv2.circle(frame, key_points_dict[part_a], 8, (0, 255, 0), thickness=-1, lineType=cv2.FILLED) # Cor Verde
-                cv2.circle(frame, key_points_dict[part_b], 8, (0, 255, 0), thickness=-1, lineType=cv2.FILLED) # Cor Verde
+                cv2.line(frame, key_points_dict[part_a], key_points_dict[part_b], (255, 0, 0), 2)
+                cv2.circle(frame, key_points_dict[part_a], 8, (0, 255, 0), thickness=-1, lineType=cv2.FILLED)
+                cv2.circle(frame, key_points_dict[part_b], 8, (0, 255, 0), thickness=-1, lineType=cv2.FILLED)
 
     return frame, key_points_dict
 
-# --- Funções de Análise RULA ---
 
+# --- Funções de Análise RULA ---
+# (calculate_angle, classify_..., rula_risk permanecem inalteradas)
 def calculate_angle(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
     ba, bc = a - b, c - b
@@ -224,22 +220,74 @@ def rula_risk(point_score, wrist, trunk, upper_Shoulder, lower_Limb, neck,
         
         except (KeyError, IndexError):
             rula['risk'] = "Erro de Cálculo (Combinação Inválida)"
-            rula['score'] = 8 # Risco máximo por segurança
+            rula['score'] = 8 
             
     return rula, point_score
 
+# --- FUNÇÃO DE DESENHO GEOMÉTRICO (REESCRITA) ---
+def draw_angle_on_frame(frame, p1, p2, p3, angle_value, color=(255, 255, 0), radius=30, thickness=2, font_scale=0.6):
+    """
+    Desenha um arco e o valor do ângulo no frame, corrigido para
+    sempre desenhar o ângulo interno (< 180).
+    p2 é o vértice do ângulo.
+    """
+    if None in (p1, p2, p3, angle_value):
+        return frame # Não desenha se os pontos ou o ângulo não forem válidos
 
-# --- Função Principal de Processamento (O "Despachante") ---
+    # Converte para array numpy para cálculos vetoriais
+    p1, p2, p3 = np.array(p1), np.array(p2), np.array(p3)
 
+    # Vetores
+    v1 = p1 - p2
+    v2 = p3 - p2
+
+    # Ângulos absolutos dos vetores (em radianos)
+    angle1_rad = np.arctan2(v1[1], v1[0])
+    angle2_rad = np.arctan2(v2[1], v2[0])
+    
+    # Produto vetorial 2D para determinar a orientação (horário vs anti-horário)
+    # v1[0]*v2[1] - v1[1]*v2[0]
+    cross_prod = v1[0]*v2[1] - v1[1]*v2[0]
+
+    # `angle_value` é o ângulo interno que *sempre* queremos desenhar (0-180)
+    angle_value_deg = angle_value
+    
+    # cv2.ellipse desenha SEMPRE anti-horário (CCW)
+    if cross_prod < 0: # O sweep é CCW de v1 para v2
+        start_angle_deg = np.degrees(angle1_rad)
+        end_angle_deg = start_angle_deg + angle_value_deg
+    else: # O sweep é CW de v1 para v2, então desenhamos CCW de v2 para v1
+        start_angle_deg = np.degrees(angle2_rad)
+        end_angle_deg = start_angle_deg + angle_value_deg
+            
+    # Desenha o arco
+    cv2.ellipse(frame, tuple(p2.astype(int)), (radius, radius), 0, start_angle_deg, end_angle_deg, color, thickness, cv2.LINE_AA)
+
+    # Posição para o texto do ângulo (no bissetor do ângulo)
+    text_angle_rad = np.radians(start_angle_deg + (angle_value_deg / 2))
+    text_offset_x = int(p2[0] + (radius + 15) * np.cos(text_angle_rad))
+    text_offset_y = int(p2[1] + (radius + 15) * np.sin(text_angle_rad))
+    
+    # Garante que o texto esteja legível e não fora da tela
+    h, w, _ = frame.shape
+    text_offset_x = max(0, min(w - 50, text_offset_x))
+    text_offset_y = max(20, min(h - 10, text_offset_y))
+
+    cv2.putText(frame, f"{angle_value:.1f}°", (text_offset_x, text_offset_y), 
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
+    return frame
+
+# --- Função Principal de Processamento de Frame (COM A CORREÇÃO DE TIPO DE DADO) ---
 def process_frame_for_rula(frame, detector_name='mediapipe'):
     """
-    Processa um único frame, despachando para o detector de pose correto,
-    e depois calcula o RULA, retornando também as métricas.
+    Processa um único frame, despacha para o detector de pose correto,
+    calcula o RULA, e agora DESENHA os ângulos geometricamente.
     """
     if tablea is None:
         return frame, {'score': 'ERROR', 'risk': 'Tabelas RULA não carregadas'}, {}
 
     # Passo 1: Detectar a pose
+    # (key_points daqui são seguros para JSON, pois os detectores usam int())
     key_points = {}
     if detector_name == 'mediapipe':
         frame, key_points = detect_pose_mediapipe(frame)
@@ -256,7 +304,6 @@ def process_frame_for_rula(frame, detector_name='mediapipe'):
 
     rula_result = {'score': 'NULL', 'risk': 'NULL'}
     
-    # Inicializa métricas e ângulos que queremos coletar
     metrics = {
         'upper_arm_angle': None, 'lower_arm_angle': None, 'trunk_angle': None, 'neck_angle': None,
         'upper_arm_score': 0, 'lower_arm_score': 0, 'wrist_score': 0,
@@ -264,39 +311,81 @@ def process_frame_for_rula(frame, detector_name='mediapipe'):
         'rula_score': None, 'rula_risk': 'NULL'
     }
 
-    # Passo 2: Calcular ângulos e RULA (lógica unificada)
     if not key_points:
-        return frame, rula_result, metrics # Retorna métricas vazias se nada for detectado
+        return frame, rula_result, metrics, key_points 
 
-    # Aproximação de 'Neck' para YOLO
+    # --- INÍCIO DA CORREÇÃO DE TIPO (para erro JSON) ---
+    # (Garante que pontos derivados do NumPy sejam `int` padrão do Python)
+
+    # Aproximação de 'Neck' (se não detectado diretamente)
     if 'Neck' not in key_points and all(key_points.get(k) for k in ['RShoulder', 'LShoulder']):
         r_shoulder = np.array(key_points['RShoulder'])
         l_shoulder = np.array(key_points['LShoulder'])
-        key_points['Neck'] = tuple(((r_shoulder + l_shoulder) / 2).astype(int))
+        neck_np = ((r_shoulder + l_shoulder) / 2).astype(int)
+        # CORREÇÃO: Converte (np.int32, np.int32) para (int, int)
+        key_points['Neck'] = (int(neck_np[0]), int(neck_np[1]))
 
     # --- Cálculos de Ângulo e Pontuação ---
-    if all(key_points.get(k) for k in ['RShoulder', 'RElbow', 'RHip']):
+    
+    # OM BRO / BRAÇO SUPERIOR (direito)
+    if all(key_points.get(k) for k in ['RHip', 'RShoulder', 'RElbow']):
         metrics['upper_arm_angle'] = calculate_angle(key_points['RHip'], key_points['RShoulder'], key_points['RElbow'])
         metrics['upper_arm_score'] = classify_upper_arm(metrics['upper_arm_angle'])
+        # Passando p1, p2 (vértice), p3
+        frame = draw_angle_on_frame(frame, key_points['RHip'], key_points['RShoulder'], key_points['RElbow'], metrics['upper_arm_angle'], color=(255, 255, 0)) # Amarelo
+    elif all(key_points.get(k) for k in ['LHip', 'LShoulder', 'LElbow']): # Tenta o esquerdo
+         metrics['upper_arm_angle'] = calculate_angle(key_points['LHip'], key_points['LShoulder'], key_points['LElbow'])
+         metrics['upper_arm_score'] = classify_upper_arm(metrics['upper_arm_angle'])
+         frame = draw_angle_on_frame(frame, key_points['LHip'], key_points['LShoulder'], key_points['LElbow'], metrics['upper_arm_angle'], color=(255, 255, 0)) # Amarelo
+    else:
+        print("Ombro: Landmarks insuficientes para cálculo do ângulo.")
 
+    # COTOVELO / BRAÇO INFERIOR (direito)
     if all(key_points.get(k) for k in ['RShoulder', 'RElbow', 'RWrist']):
         metrics['lower_arm_angle'] = calculate_angle(key_points['RShoulder'], key_points['RElbow'], key_points['RWrist'])
         metrics['lower_arm_score'] = classify_lower_arm(metrics['lower_arm_angle'])
-    
+        frame = draw_angle_on_frame(frame, key_points['RShoulder'], key_points['RElbow'], key_points['RWrist'], metrics['lower_arm_angle'], color=(255, 255, 0)) # Amarelo
+    elif all(key_points.get(k) for k in ['LShoulder', 'LElbow', 'LWrist']): # Tenta o esquerdo
+         metrics['lower_arm_angle'] = calculate_angle(key_points['LShoulder'], key_points['LElbow'], key_points['LWrist'])
+         metrics['lower_arm_score'] = classify_lower_arm(metrics['lower_arm_angle'])
+         frame = draw_angle_on_frame(frame, key_points['LShoulder'], key_points['LElbow'], key_points['LWrist'], metrics['lower_arm_angle'], color=(255, 255, 0)) # Amarelo
+    else:
+        print("Cotovelo: Landmarks insuficientes para cálculo do ângulo.")
+
+    # TRONCO
     if all(key_points.get(k) for k in ['Neck', 'LHip', 'RHip']):
-        hip_mid = (np.array(key_points['LHip']) + np.array(key_points['RHip'])) // 2
-        # Usamos RKnee como referência, se não existir, usa um ponto abaixo do quadril
-        ref_point = key_points.get('RKnee', tuple(hip_mid + (0, 50))) 
-        metrics['trunk_angle'] = calculate_angle(key_points['Neck'], tuple(hip_mid), ref_point)
+        hip_mid_np = (np.array(key_points['LHip']) + np.array(key_points['RHip'])) // 2
+        # CORREÇÃO: Converte (np.int32, np.int32) para (int, int)
+        hip_mid = (int(hip_mid_np[0]), int(hip_mid_np[1])) 
+        
+        ref_point_np = key_points.get('RKnee') # Tenta pegar o joelho
+        if ref_point_np is None:
+            ref_point_np = tuple(hip_mid_np + (0, 50)) # Se não achar, usa um ponto abaixo (calculado com np)
+        
+        # CORREÇÃO: Converte o ponto de referência para (int, int), seja do joelho ou o calculado
+        ref_point = (int(ref_point_np[0]), int(ref_point_np[1]))
+        
+        metrics['trunk_angle'] = calculate_angle(key_points['Neck'], hip_mid, ref_point)
         metrics['trunk_score'] = classify_trunk(metrics['trunk_angle'])
+        frame = draw_angle_on_frame(frame, key_points['Neck'], hip_mid, ref_point, metrics['trunk_angle'], color=(0, 255, 0), radius=50) # Verde
+    else:
+        print("Tronco: Landmarks insuficientes para cálculo do ângulo.")
 
+    # PESCOÇO / CABEÇA
     if all(key_points.get(k) for k in ['Nose', 'Neck', 'LHip', 'RHip']):
-        hip_mid = (np.array(key_points['LHip']) + np.array(key_points['RHip'])) // 2
-        neck_angle_raw = calculate_angle(tuple(hip_mid), key_points['Neck'], key_points['Nose'])
-        metrics['neck_angle'] = 180 - neck_angle_raw # Ângulo de inclinação
+        hip_mid_np = (np.array(key_points['LHip']) + np.array(key_points['RHip'])) // 2
+        # CORREÇÃO: Converte (np.int32, np.int32) para (int, int)
+        hip_mid = (int(hip_mid_np[0]), int(hip_mid_np[1]))
+        
+        neck_angle_raw = calculate_angle(hip_mid, key_points['Neck'], key_points['Nose'])
+        metrics['neck_angle'] = 180 - neck_angle_raw 
         metrics['neck_score'] = classify_neck(metrics['neck_angle'])
+        frame = draw_angle_on_frame(frame, hip_mid, key_points['Neck'], key_points['Nose'], metrics['neck_angle'], color=(255, 0, 0), radius=25) # Azul
+    else:
+        print("Pescoço: Landmarks insuficientes para cálculo do ângulo.")
+    
+    # --- FIM DA CORREÇÃO DE TIPO ---
 
-    # Simplificações mantidas
     metrics['wrist_score'] = 1
     metrics['leg_score'] = 1
     
@@ -307,79 +396,7 @@ def process_frame_for_rula(frame, detector_name='mediapipe'):
         muscle_use=0, force_load_a=0, force_load_b=0, upper_body_muscle=0
     )
     
-    # Armazena o resultado final do RULA nas métricas
     metrics['rula_score'] = rula_result.get('score')
     metrics['rula_risk'] = rula_result.get('risk')
 
-    return frame, rula_result, metrics
-
-def get_rula_assessment_text(score):
-    """Converte um score numérico em texto de avaliação."""
-    if score <= 2: 
-        return 'Negligible'
-    if score <= 4: 
-        return 'Low risk'
-    if score <= 6: 
-        return 'Medium risk'
-    if score > 6: 
-        return 'Very high risk'
-    return 'Unknown'
-
-def calculate_summary_statistics(all_frame_metrics, fps, total_frames, user_context_dict, request_id):
-    """
-    Recebe uma lista de métricas de todos os frames e calcula o JSON de resumo.
-    """
-    if not all_frame_metrics:
-        print("Nenhuma métrica foi coletada para o resumo.")
-        return None
-
-    total_video_duration_seconds = total_frames / fps if fps > 0 else 0
-
-    # --- Cálculo das Estatísticas ---
-    df = pd.DataFrame(all_frame_metrics)
-    
-    # Converte colunas numéricas, tratando 'NULL' ou 'Erro' como NaN
-    df['rula_score'] = pd.to_numeric(df['rula_score'], errors='coerce')
-    df['neck_angle'] = pd.to_numeric(df['neck_angle'], errors='coerce')
-    df['trunk_angle'] = pd.to_numeric(df['trunk_angle'], errors='coerce')
-
-    # Filtra os NaNs (frames onde a detecção falhou)
-    df_valid_rula = df.dropna(subset=['rula_score'])
-    df_valid_neck = df.dropna(subset=['neck_angle'])
-    df_valid_trunk = df.dropna(subset=['trunk_angle'])
-
-    # 1. Métricas de Vídeo
-    # Define "má postura" como RULA score > 4 (Médio ou Alto risco)
-    bad_posture_frames = len(df_valid_rula[df_valid_rula['rula_score'] > 4])
-    time_in_bad_posture_seconds = (bad_posture_frames / fps) if fps > 0 else 0
-
-    video_metrics = {
-        "total_video_duration_seconds": total_video_duration_seconds,
-        "time_in_bad_posture_seconds": time_in_bad_posture_seconds,
-        "avg_head_tilt_degrees": df_valid_neck['neck_angle'].mean() if not df_valid_neck.empty else 0,
-        "max_head_tilt_degrees": df_valid_neck['neck_angle'].max() if not df_valid_neck.empty else 0,
-        "avg_back_curvature_degrees": df_valid_trunk['trunk_angle'].mean() if not df_valid_trunk.empty else 0,
-        "max_back_curvature_degrees": df_valid_trunk['trunk_angle'].max() if not df_valid_trunk.empty else 0
-    }
-
-    # 2. Estatísticas de Vídeo
-    mean_rula = df_valid_rula['rula_score'].mean() if not df_valid_rula.empty else 0
-    
-    video_statics = {
-        "mean_rula_score": mean_rula,
-        "rula_score_assessment": get_rula_assessment_text(mean_rula),
-        "sd_rula": df_valid_rula['rula_score'].std() if not df_valid_rula.empty else 0,
-        "variance": df_valid_rula['rula_score'].var() if not df_valid_rula.empty else 0
-    }
-    
-    # 3. Montagem do JSON Final
-    summary_json = {
-        "request_id": request_id,
-        "analysis_timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "risk_score": mean_rula, # Usando a média RULA como o score de risco principal
-        "video_metrics": video_metrics,
-        "video_statics": video_statics,
-        "user_context": user_context_dict
-    }
-    
-    return summary_json
+    return frame, rula_result, metrics, key_points
