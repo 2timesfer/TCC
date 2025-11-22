@@ -13,7 +13,7 @@ Responsável por:
 """
 import gradio as gr
 from video_process import process_video_and_collect_raw_data
-from reports import generate_report_from_raw_file 
+from reports import generate_report_json, format_report_for_gui
 import datetime
 import json
 import os
@@ -62,16 +62,20 @@ def video_analysis_interface(video_file, detector_choice):
     if raw_data_path:
         # --- 3. Chamar o Analisador de Dados ---
         # Ele lê o JSON bruto e gera o relatório em texto
-        text_report = generate_report_from_raw_file(
+        report_data_json = generate_report_json(
             raw_json_path=raw_data_path,
             user_context=DEFAULT_USER_CONTEXT,
-            request_id=request_id
+            request_id=request_id,
+            model_name="llama3.2" # Certifique-se que o llama3 está instalado no Ollama
         )
+        
+        # Transforma o JSON em uma string bonita para o usuário ler
+        friendly_text_report = format_report_for_gui(report_data_json)
         
         print(f"Análise concluída. Vídeo: {processed_video}, Dados Brutos: {raw_data_path}")
         
         # --- 4. Retornar os 3 resultados para o Gradio ---
-        return processed_video, raw_data_path, text_report
+        return processed_video, raw_data_path, friendly_text_report
     else:
         print("A análise falhou.")
         return None, None, "A análise do vídeo falhou."

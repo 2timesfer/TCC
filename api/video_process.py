@@ -10,6 +10,13 @@ Responsável por:
 6. Salvar a lista completa de métricas brutas em um arquivo .json.
 
 NOTA: O desenho dos ângulos geométricos agora é feito DIRETAMENTE em ergonomy_risk.py.
+
+CORREÇÃO DE ORIENTAÇÃO:
+Ao invés de confiar em cap.get(cv2.CAP_PROP_FRAME_WIDTH), que pode ler metadados
+incorretos se o vídeo estiver rotacionado (ex: celular em pé), nós lemos o
+primeiro frame real para determinar o tamanho exato da matriz de pixels.
+Isso garante que o vídeo de saída tenha a mesma geometria que o OpenCV lê,
+evitando vídeos esticados ou ilegíveis.
 """
 import cv2
 import numpy as np
@@ -45,11 +52,7 @@ def detect_person_box(frame, margin_pct=0.15):
         max(0, x1 - mx),
         max(0, y1 - my),
         min(w, x2 + mx),
-        min(h, y2 + my)
-    )
-
-# A função draw_angle_annotations ANTERIOR FOI REMOVIDA daqui.
-# O desenho agora ocorre no ergonomy_risk.py.
+        min(h, y2 + my))
 
 def process_video_and_collect_raw_data(video_path, 
                                        output_path, 
@@ -64,17 +67,29 @@ def process_video_and_collect_raw_data(video_path,
         print("Erro ao abrir o vídeo.")
         return None, None
 
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # --- CORREÇÃO DE ORIENTAÇÃO/DIMENSÃO ---
+    # Lemos o primeiro frame para pegar as dimensões REAIS da matriz de imagem.
+    # Metadados (CAP_PROP_WIDTH) mentem se houver rotação de celular.
+    ret, first_frame = cap.read()
+    if not ret:
+        print("Não foi possível ler o primeiro frame do vídeo.")
+        return None, None
+    
+    # As dimensões do Writer DEVEM casar com o shape do frame lido
+    frame_height, frame_width = first_frame.shape[:2]
     fps = cap.get(cv2.CAP_PROP_FPS)
     
+    # Reinicia o vídeo para o começo para processar o frame 0 novamente no loop
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    
     fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
 
     all_frame_metrics = []
     frame_count = 0
 
-    print(f"Processando vídeo e coletando dados brutos: {video_path}...")
+    print(f"Processando vídeo: {video_path} | Dimensões detectadas: {frame_width}x{frame_height}")
+    
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -87,33 +102,34 @@ def process_video_and_collect_raw_data(video_path,
             
             if roi.size == 0:
                 all_frame_metrics.append({}) 
+                out.write(frame) # Escreve o frame original se falhar ROI
                 continue
 
             # Chama o 'ergonomy_risk'. Ele AGORA também desenha os ângulos no 'processed_roi'.
-            # Note a adição de 'key_points' no retorno
             processed_roi, rula_result, metrics, key_points = process_frame_for_rula(roi, detector_name=detector_name)
             
-            # Adiciona os key_points brutos ao dicionário de métricas para salvar no JSON
-            # Isso pode ser útil para debug ou reanálise futura.
+            # Adiciona os key_points brutos ao dicionário de métricas
             metrics['key_points'] = {k: v for k, v in key_points.items() if v is not None}
 
-            # 2. ARMAZENA as métricas para o JSON
+            # ARMAZENA as métricas para o JSON
             metrics['timestamp_sec'] = frame_count / fps if fps > 0 else 0
             all_frame_metrics.append(metrics)
             
-            # 3. COLOCA O ROI (agora com esqueleto E ângulos desenhados) de volta no frame
+            # COLOCA O ROI (agora com esqueleto E ângulos desenhados) de volta no frame
             frame[y1:y2, x1:x2] = processed_roi
 
-            # 4. DESENHA o score RULA DESTE FRAME (continua sendo textual, como antes)
+            # DESENHA o score RULA DESTE FRAME
             if rula_result and rula_result['risk'] != 'NULL':
                 text = f"RULA Score: {rula_result['score']} ({rula_result['risk']})"
                 color = (0, 0, 255) if rula_result['risk'] in ['Medium risk', 'Very high risk'] else (0, 255, 0)
-                cv2.putText(frame, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                # Verifica se o texto cabe na tela
+                text_y = max(30, y1 - 10)
+                cv2.putText(frame, text, (max(0, x1), text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
             
         else:
              all_frame_metrics.append({'timestamp_sec': frame_count / fps if fps > 0 else 0})
 
-        # 6. SALVA o frame (agora com ângulos e score) no vídeo de saída
+        # SALVA o frame no vídeo de saída
         out.write(frame)
         frame_count += 1
 
